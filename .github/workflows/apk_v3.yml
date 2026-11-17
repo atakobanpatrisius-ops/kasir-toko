@@ -1,0 +1,99 @@
+name: Bangun APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - index.html
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Siapkan proyek Android
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+          npm init -y > /dev/null
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/app@6 @capacitor/status-bar@6
+          echo '{"appId":"com.cassandra.kasir","appName":"Kasir Toko","webDir":"www","backgroundColor":"#EEF0F6"}' > capacitor.config.json
+          npx cap add android
+          npx cap sync android
+          # latar layar pembuka disamakan dengan warna aplikasi (tanpa kedip putih / logo bawaan)
+          STY=android/app/src/main/res/values/styles.xml
+          if grep -q "AppTheme.NoActionBarLaunch" "$STY"; then
+            sed -i 's#<item name="android:background">@drawable/splash</item>#<item name="android:background">\#EEF0F6</item>#' "$STY"
+            sed -i '/name="AppTheme.NoActionBarLaunch"/a\        <item name="windowSplashScreenBackground">\#EEF0F6</item>' "$STY"
+          fi
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+
+      - name: Pasang ikon aplikasi
+        run: |
+          RES=android/app/src/main/res
+          if [ -f ikon.png ] && [ -f ikon-depan.png ] && [ -f ikon-latar.png ]; then
+            T=ikon_hasil
+            if (
+              set -e
+              for d in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
+                n=${d%%:*}; r=${d#*:}; s=${r%%:*}; f=${r#*:}
+                mkdir -p "$T/mipmap-$n"
+                convert ikon.png -resize ${s}x${s} "$T/mipmap-$n/ic_launcher.png"
+                convert ikon.png -resize ${s}x${s} \( -size ${s}x${s} xc:none -fill white -draw "circle $((s/2)),$((s/2)) $((s/2)),0" \) -compose DstIn -composite "$T/mipmap-$n/ic_launcher_round.png"
+                convert ikon-depan.png -resize ${f}x${f} "$T/mipmap-$n/ic_launcher_foreground.png"
+                convert ikon-latar.png -resize ${f}x${f} "$T/mipmap-$n/ic_launcher_background.png"
+              done
+            ); then
+              cp -r "$T"/mipmap-* "$RES"/
+              mkdir -p "$RES/mipmap-anydpi-v26"
+              for x in ic_launcher ic_launcher_round; do
+                printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' '    <background android:drawable="@mipmap/ic_launcher_background"/>' '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' '</adaptive-icon>' > "$RES/mipmap-anydpi-v26/$x.xml"
+              done
+              echo "Ikon aplikasi terpasang"
+            else
+              echo "Ikon dilewati (gagal dibuat), memakai ikon bawaan"
+            fi
+          else
+            echo "File ikon tidak ada, memakai ikon bawaan"
+          fi
+
+      - name: Siapkan kunci aplikasi (dibuat sekali, dipakai seterusnya)
+        run: |
+          if [ ! -f kasir.keystore ]; then
+            keytool -genkeypair -keystore kasir.keystore -alias kasir -keyalg RSA -keysize 2048 -validity 36500 -storepass kasir123 -keypass kasir123 -dname "CN=Kasir Toko"
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add kasir.keystore
+            git commit -m "Tambah kunci aplikasi"
+            git push
+          fi
+
+      - name: Bangun APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+          cd ..
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/zipalign" -f -p 4 android/app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          "$BT/apksigner" sign --ks kasir.keystore --ks-pass pass:kasir123 --key-pass pass:kasir123 --out Kasir-Toko.apk aligned.apk
+
+      - name: Terbitkan APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "apk-${{ github.run_number }}" Kasir-Toko.apk --title "Kasir Toko #${{ github.run_number }}" --notes "Unduh Kasir-Toko.apk lalu pasang di HP."
+          
