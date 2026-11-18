@@ -3200,7 +3200,7 @@ async function img(i, P, V) {
   $("dl").onclick = async () => {
     try {
       const b = await (await fetch(url)).blob();
-      if (await saveFile(no + (M ? "-modal" : "") + ".png", b)) toast("Gambar nota disimpan ke galeri");
+      if (await saveFile(no + (M ? "-modal" : "") + ".png", b)) toast(window.__sv === "galeri" ? "Gambar nota disimpan ke galeri" : window.__sv === "bagi" ? "Pilih Simpan ke galeri / Foto di menu bagikan" : "Gambar nota diunduh ke folder Download (bukan galeri)");
     } catch (e) {
       toast("Gagal menyimpan, tekan lama gambar lalu pilih simpan");
     }
@@ -3438,12 +3438,16 @@ async function saveFile(name, blob) {
           fr.readAsDataURL(blob);
         });
         await gp.simpan({ nama: name, data: b64, mime: blob.type || "application/octet-stream" });
+        window.__sv = "galeri";
         return true;
       }
     }
   } catch (e) {
-    toast("Gagal menyimpan: " + ((e && e.message) || e));
-    return false;
+    const em = String((e && e.message) || e);
+    if (!/implemented|unavailable|not found/i.test(em)) {
+      toast("Gagal menyimpan: " + em);
+      return false;
+    }
   }
   let d = null;
   try {
@@ -3461,8 +3465,9 @@ async function saveFile(name, blob) {
   }
   try {
     const fl = new File([blob], name, { type: blob.type });
-    if (!/^image\//.test(blob.type) && /Android|iPhone|iPad/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [fl] })) {
+    if (/Android|iPhone|iPad/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [fl] })) {
       await navigator.share({ files: [fl], title: name });
+      window.__sv = "bagi";
       return true;
     }
   } catch (e) {
@@ -3478,6 +3483,7 @@ async function saveFile(name, blob) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5e3);
+  window.__sv = "unduh";
   return true;
 }
 function judulX(name) {
